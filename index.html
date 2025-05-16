@@ -233,6 +233,22 @@
             animation: spin 1s ease-in-out infinite;
             margin-right: 10px;
         }
+        
+        .refresh-indicator {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--accent-color);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        .refresh-indicator.active {
+            opacity: 1;
+        }
 
         @keyframes spin {
             to {
@@ -265,6 +281,8 @@
             <!-- Posts will appear here -->
         </div>
     </div>
+    
+    <div class="refresh-indicator" id="refresh-indicator"></div>
 
     <script>
         // Constants
@@ -272,6 +290,7 @@
         const BIN_ID = "68277dad8561e97a50154401";
         const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
         const LINKPREVIEW_API_KEY = "7c43c15d7fca3fbac408782aa056c852";
+        const REFRESH_INTERVAL = 5000; // 5 seconds
 
         // DOM Elements
         const postBtn = document.getElementById("post-btn");
@@ -281,6 +300,11 @@
         const feedContainer = document.getElementById("feed");
         const statusEl = document.getElementById("status");
         const loadingEl = document.querySelector(".loading");
+        const refreshIndicator = document.getElementById("refresh-indicator");
+        
+        // State variables
+        let lastPostsHash = '';
+        let refreshTimer = null;
         
         // Try to load saved name from localStorage
         window.addEventListener("load", () => {
@@ -291,10 +315,63 @@
         });
 
         // Initialize app
-        document.addEventListener("DOMContentLoaded", fetchPosts);
+        document.addEventListener("DOMContentLoaded", () => {
+            fetchPosts();
+            startAutoRefresh();
+        });
 
         // Event Listeners
         postBtn.addEventListener("click", handlePostSubmit);
+
+        // Start auto refresh
+        function startAutoRefresh() {
+            // Clear any existing timer
+            if (refreshTimer) {
+                clearInterval(refreshTimer);
+            }
+            
+            // Set up new timer
+            refreshTimer = setInterval(refreshPosts, REFRESH_INTERVAL);
+        }
+        
+        // Function to refresh posts without showing loading spinner
+        async function refreshPosts() {
+            try {
+                // Show subtle indicator
+                refreshIndicator.classList.add("active");
+                
+                const response = await fetch(JSONBIN_URL, {
+                    method: "GET",
+                    headers: {
+                        "X-Master-Key": API_KEY
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Error fetching posts: ${response.status}`);
+                }
+
+                const data = await response.json();
+                const posts = data.record.posts || [];
+                
+                // Create a hash of the posts to check if they've changed
+                const currentPostsHash = JSON.stringify(posts);
+                
+                // Only re-render if the content has changed
+                if (currentPostsHash !== lastPostsHash) {
+                    lastPostsHash = currentPostsHash;
+                    renderPosts(posts);
+                }
+            } catch (error) {
+                console.error("Error refreshing posts:", error);
+                // Don't show error on auto-refresh to avoid disrupting the user
+            } finally {
+                // Hide indicator after a short delay
+                setTimeout(() => {
+                    refreshIndicator.classList.remove("active");
+                }, 300);
+            }
+        }
 
         // Fetch all posts
         async function fetchPosts() {
@@ -313,6 +390,10 @@
 
                 const data = await response.json();
                 const posts = data.record.posts || [];
+                
+                // Update the last posts hash
+                lastPostsHash = JSON.stringify(posts);
+                
                 renderPosts(posts);
                 showLoading(false);
             } catch (error) {
@@ -394,10 +475,16 @@
                     throw new Error(`Error updating posts: ${updateResponse.status}`);
                 }
 
+                // Update the last posts hash
+                lastPostsHash = JSON.stringify(allPosts);
+                
                 showStatus("Post publicado com sucesso!", false);
                 contentInput.value = "";
                 linkInput.value = "";
                 renderPosts(allPosts);
+                
+                // Reset the auto refresh timer to avoid immediate refresh after posting
+                startAutoRefresh();
             } catch (error) {
                 console.error("Error posting content:", error);
                 showStatus("Erro ao publicar conteúdo. Tente novamente.", true);
