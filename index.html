@@ -235,7 +235,7 @@
         }
         
         .auto-refresh {
-            display: flex;
+            display: none; /* Hide the indicator */
             align-items: center;
             justify-content: center;
             padding: 5px 10px;
@@ -245,21 +245,6 @@
             font-size: 14px;
             color: #a1a1a6;
             max-width: fit-content;
-        }
-        
-        .auto-refresh-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background-color: var(--accent-color);
-            margin-right: 8px;
-            animation: pulse 2s infinite;
-        }
-        
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.3; }
-            100% { opacity: 1; }
         }
 
         @keyframes spin {
@@ -285,8 +270,7 @@
         </div>
         
         <div class="auto-refresh">
-            <div class="auto-refresh-dot"></div>
-            <span>Atualizando a cada 5 segundos</span>
+            <span>Atualização automática ativa</span>
         </div>
 
         <div class="loading">
@@ -316,6 +300,10 @@
         const statusEl = document.getElementById("status");
         const loadingEl = document.querySelector(".loading");
         
+        // Cache to prevent flickering during updates
+        let currentPosts = [];
+        let initialRender = true;
+        
         // Try to load saved name from localStorage
         window.addEventListener("load", () => {
             const savedName = localStorage.getItem("userName");
@@ -330,7 +318,7 @@
             
             // Setup auto-refresh
             setInterval(() => {
-                console.log("Auto-refresh: Fetching posts...");
+                console.log("Auto-refresh: Fetching posts silently...");
                 fetchPosts(true); // true means silent refresh (no loading spinner)
             }, REFRESH_INTERVAL);
         });
@@ -345,13 +333,12 @@
                     showLoading(true);
                 }
                 
-                const response = await fetch(JSONBIN_URL, {
+                const response = await fetch(JSONBIN_URL + "?cacheBuster=" + new Date().getTime(), {
                     method: "GET",
                     headers: {
                         "X-Master-Key": API_KEY
                     },
-                    // Prevent caching
-                    cache: "no-cache"
+                    cache: "no-store" // Strongest no-cache option
                 });
 
                 if (!response.ok) {
@@ -360,7 +347,9 @@
 
                 const data = await response.json();
                 const posts = data.record.posts || [];
-                renderPosts(posts);
+                
+                // Smart rendering to avoid flickering
+                updatePosts(posts, silent);
                 
                 if (!silent) {
                     showLoading(false);
@@ -372,6 +361,133 @@
                     showLoading(false);
                 }
             }
+        }
+        
+        // Smart update of posts without full re-render
+        function updatePosts(newPosts, silent) {
+            if (newPosts.length === 0) {
+                if (currentPosts.length === 0 || initialRender) {
+                    feedContainer.innerHTML = `<div class="post"><p>Nenhum post ainda. Seja o primeiro a compartilhar algo!</p></div>`;
+                }
+                currentPosts = [];
+                initialRender = false;
+                return;
+            }
+            
+            // First time or after posting we do a full render
+            if (initialRender || !silent) {
+                renderAllPosts(newPosts);
+                initialRender = false;
+                return;
+            }
+            
+            // Check if we have new posts (posts that don't exist in current posts)
+            const existingPostIds = new Set(currentPosts.map(p => p.id));
+            const newPostsToAdd = newPosts.filter(post => !existingPostIds.has(post.id));
+            
+            // If we have new posts, add them at the top without re-rendering existing ones
+            if (newPostsToAdd.length > 0) {
+                const scrollPos = window.scrollY;
+                
+                // Remember the height before adding new content
+                const oldHeight = document.body.scrollHeight;
+                
+                // Add new posts at the top
+                for (let i = newPostsToAdd.length - 1; i >= 0; i--) {
+                    const postElement = createPostElement(newPostsToAdd[i]);
+                    feedContainer.insertBefore(postElement, feedContainer.firstChild);
+                }
+                
+                // Maintain scroll position so user doesn't jump around
+                if (scrollPos > 0) {
+                    const newHeight = document.body.scrollHeight;
+                    const heightDiff = newHeight - oldHeight;
+                    window.scrollTo(0, scrollPos + heightDiff);
+                }
+            }
+            
+            // Update current posts cache
+            currentPosts = [...newPosts];
+        }
+
+        // Render all posts (full render)
+        function renderAllPosts(posts) {
+            // Save scroll position
+            const scrollPos = window.scrollY;
+            
+            // Clear and rebuild
+            feedContainer.innerHTML = "";
+            
+            posts.forEach(post => {
+                const postElement = createPostElement(post);
+                feedContainer.appendChild(postElement);
+            });
+            
+            // Update cache
+            currentPosts = [...posts];
+            
+            // Restore scroll position
+            window.scrollTo(0, scrollPos);
+        }
+        
+        // Create a post element without adding it to DOM
+        function createPostElement(post) {
+            const postElement = document.createElement("div");
+            postElement.className = "post";
+            postElement.dataset.postId = post.id;
+            
+            const formattedDate = formatDate(post.date);
+            const authorName = post.name || "Anônimo";
+
+            let linkContent = '';
+            let previewContent = '';
+
+            if (post.link) {
+                linkContent = `<a href="${post.link}" target="_blank" class="post-link">${post.link}</a>`;
+                
+                // Handle YouTube videos specially
+                const youtubeId = extractYoutubeId(post.link);
+                if (youtubeId) {
+                    previewContent = `
+                        <div class="youtube-embed">
+                            <iframe src="https://www.youtube.com/embed/${youtubeId}" 
+                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                                    allowfullscreen></iframe>
+                        </div>
+                    `;
+                } 
+                // Handle other links with previews if metadata is available
+                else if (post.metadata) {
+                    const metadata = post.metadata;
+                    const imageUrl = metadata.image || '';
+                    const title = metadata.title || 'Link';
+                    const description = metadata.description || '';
+                    const domain = extractDomain(post.link);
+
+                    previewContent = `
+                        <div class="preview">
+                            ${imageUrl ? `<img src="${imageUrl}" class="preview-image" alt="${title}">` : ''}
+                            <div class="preview-content">
+                                <h3 class="preview-title">${title}</h3>
+                                <p class="preview-description">${description}</p>
+                                <span class="preview-domain">${domain}</span>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            postElement.innerHTML = `
+                <div class="post-header">
+                    <strong>${authorName}</strong>
+                    <span class="post-date">${formattedDate}</span>
+                </div>
+                ${post.content ? `<div class="post-content">${post.content}</div>` : ''}
+                ${linkContent}
+                ${previewContent}
+            `;
+
+            return postElement;
         }
 
         // Handle post submission
@@ -399,7 +515,7 @@
                     headers: {
                         "X-Master-Key": API_KEY
                     },
-                    cache: "no-cache"
+                    cache: "no-store"
                 });
 
                 if (!response.ok) {
@@ -451,8 +567,8 @@
                 contentInput.value = "";
                 linkInput.value = "";
                 
-                // Render the updated posts
-                renderPosts(allPosts);
+                // Update with the new posts
+                updatePosts(allPosts, false);
             } catch (error) {
                 console.error("Error posting content:", error);
                 showStatus("Erro ao publicar conteúdo. Tente novamente.", true);
@@ -471,74 +587,6 @@
             }
             
             return await response.json();
-        }
-
-        // Render all posts
-        function renderPosts(posts) {
-            feedContainer.innerHTML = "";
-            
-            if (posts.length === 0) {
-                feedContainer.innerHTML = `<div class="post"><p>Nenhum post ainda. Seja o primeiro a compartilhar algo!</p></div>`;
-                return;
-            }
-
-            posts.forEach(post => {
-                const postElement = document.createElement("div");
-                postElement.className = "post";
-                
-                const formattedDate = formatDate(post.date);
-                const authorName = post.name || "Anônimo";
-
-                let linkContent = '';
-                let previewContent = '';
-
-                if (post.link) {
-                    linkContent = `<a href="${post.link}" target="_blank" class="post-link">${post.link}</a>`;
-                    
-                    // Handle YouTube videos specially
-                    const youtubeId = extractYoutubeId(post.link);
-                    if (youtubeId) {
-                        previewContent = `
-                            <div class="youtube-embed">
-                                <iframe src="https://www.youtube.com/embed/${youtubeId}" 
-                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-                                        allowfullscreen></iframe>
-                            </div>
-                        `;
-                    } 
-                    // Handle other links with previews if metadata is available
-                    else if (post.metadata) {
-                        const metadata = post.metadata;
-                        const imageUrl = metadata.image || '';
-                        const title = metadata.title || 'Link';
-                        const description = metadata.description || '';
-                        const domain = extractDomain(post.link);
-
-                        previewContent = `
-                            <div class="preview">
-                                ${imageUrl ? `<img src="${imageUrl}" class="preview-image" alt="${title}">` : ''}
-                                <div class="preview-content">
-                                    <h3 class="preview-title">${title}</h3>
-                                    <p class="preview-description">${description}</p>
-                                    <span class="preview-domain">${domain}</span>
-                                </div>
-                            </div>
-                        `;
-                    }
-                }
-
-                postElement.innerHTML = `
-                    <div class="post-header">
-                        <strong>${authorName}</strong>
-                        <span class="post-date">${formattedDate}</span>
-                    </div>
-                    ${post.content ? `<div class="post-content">${post.content}</div>` : ''}
-                    ${linkContent}
-                    ${previewContent}
-                `;
-
-                feedContainer.appendChild(postElement);
-            });
         }
 
         // Helper functions
