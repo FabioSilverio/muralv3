@@ -234,20 +234,32 @@
             margin-right: 10px;
         }
         
-        .refresh-indicator {
-            position: fixed;
-            top: 10px;
-            right: 10px;
+        .auto-refresh {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 5px 10px;
+            background-color: var(--secondary-bg);
+            border-radius: 15px;
+            margin: 10px auto;
+            font-size: 14px;
+            color: #a1a1a6;
+            max-width: fit-content;
+        }
+        
+        .auto-refresh-dot {
             width: 8px;
             height: 8px;
             border-radius: 50%;
             background-color: var(--accent-color);
-            opacity: 0;
-            transition: opacity 0.3s ease;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
         }
         
-        .refresh-indicator.active {
-            opacity: 1;
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.3; }
+            100% { opacity: 1; }
         }
 
         @keyframes spin {
@@ -271,6 +283,11 @@
             <button id="post-btn">Publicar</button>
             <div id="status" class="status"></div>
         </div>
+        
+        <div class="auto-refresh">
+            <div class="auto-refresh-dot"></div>
+            <span>Atualizando a cada 5 segundos</span>
+        </div>
 
         <div class="loading">
             <div class="loading-spinner"></div>
@@ -281,8 +298,6 @@
             <!-- Posts will appear here -->
         </div>
     </div>
-    
-    <div class="refresh-indicator" id="refresh-indicator"></div>
 
     <script>
         // Constants
@@ -300,11 +315,6 @@
         const feedContainer = document.getElementById("feed");
         const statusEl = document.getElementById("status");
         const loadingEl = document.querySelector(".loading");
-        const refreshIndicator = document.getElementById("refresh-indicator");
-        
-        // State variables
-        let lastPostsHash = '';
-        let refreshTimer = null;
         
         // Try to load saved name from localStorage
         window.addEventListener("load", () => {
@@ -317,71 +327,31 @@
         // Initialize app
         document.addEventListener("DOMContentLoaded", () => {
             fetchPosts();
-            startAutoRefresh();
+            
+            // Setup auto-refresh
+            setInterval(() => {
+                console.log("Auto-refresh: Fetching posts...");
+                fetchPosts(true); // true means silent refresh (no loading spinner)
+            }, REFRESH_INTERVAL);
         });
 
         // Event Listeners
         postBtn.addEventListener("click", handlePostSubmit);
 
-        // Start auto refresh
-        function startAutoRefresh() {
-            // Clear any existing timer
-            if (refreshTimer) {
-                clearInterval(refreshTimer);
-            }
-            
-            // Set up new timer
-            refreshTimer = setInterval(refreshPosts, REFRESH_INTERVAL);
-        }
-        
-        // Function to refresh posts without showing loading spinner
-        async function refreshPosts() {
-            try {
-                // Show subtle indicator
-                refreshIndicator.classList.add("active");
-                
-                const response = await fetch(JSONBIN_URL, {
-                    method: "GET",
-                    headers: {
-                        "X-Master-Key": API_KEY
-                    }
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Error fetching posts: ${response.status}`);
-                }
-
-                const data = await response.json();
-                const posts = data.record.posts || [];
-                
-                // Create a hash of the posts to check if they've changed
-                const currentPostsHash = JSON.stringify(posts);
-                
-                // Only re-render if the content has changed
-                if (currentPostsHash !== lastPostsHash) {
-                    lastPostsHash = currentPostsHash;
-                    renderPosts(posts);
-                }
-            } catch (error) {
-                console.error("Error refreshing posts:", error);
-                // Don't show error on auto-refresh to avoid disrupting the user
-            } finally {
-                // Hide indicator after a short delay
-                setTimeout(() => {
-                    refreshIndicator.classList.remove("active");
-                }, 300);
-            }
-        }
-
         // Fetch all posts
-        async function fetchPosts() {
+        async function fetchPosts(silent = false) {
             try {
-                showLoading(true);
+                if (!silent) {
+                    showLoading(true);
+                }
+                
                 const response = await fetch(JSONBIN_URL, {
                     method: "GET",
                     headers: {
                         "X-Master-Key": API_KEY
-                    }
+                    },
+                    // Prevent caching
+                    cache: "no-cache"
                 });
 
                 if (!response.ok) {
@@ -390,16 +360,17 @@
 
                 const data = await response.json();
                 const posts = data.record.posts || [];
-                
-                // Update the last posts hash
-                lastPostsHash = JSON.stringify(posts);
-                
                 renderPosts(posts);
-                showLoading(false);
+                
+                if (!silent) {
+                    showLoading(false);
+                }
             } catch (error) {
                 console.error("Error fetching posts:", error);
-                showStatus("Erro ao buscar posts. Tente novamente.", true);
-                showLoading(false);
+                if (!silent) {
+                    showStatus("Erro ao buscar posts. Tente novamente.", true);
+                    showLoading(false);
+                }
             }
         }
 
@@ -427,7 +398,8 @@
                     method: "GET",
                     headers: {
                         "X-Master-Key": API_KEY
-                    }
+                    },
+                    cache: "no-cache"
                 });
 
                 if (!response.ok) {
@@ -474,17 +446,13 @@
                 if (!updateResponse.ok) {
                     throw new Error(`Error updating posts: ${updateResponse.status}`);
                 }
-
-                // Update the last posts hash
-                lastPostsHash = JSON.stringify(allPosts);
                 
                 showStatus("Post publicado com sucesso!", false);
                 contentInput.value = "";
                 linkInput.value = "";
-                renderPosts(allPosts);
                 
-                // Reset the auto refresh timer to avoid immediate refresh after posting
-                startAutoRefresh();
+                // Render the updated posts
+                renderPosts(allPosts);
             } catch (error) {
                 console.error("Error posting content:", error);
                 showStatus("Erro ao publicar conteúdo. Tente novamente.", true);
